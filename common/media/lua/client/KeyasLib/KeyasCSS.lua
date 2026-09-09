@@ -34,10 +34,15 @@
 --         the `font` property to mean "which bitmap font", not the CSS shorthand)
 --   opacity: <0..1>       overflow: hidden | visible
 --
+-- SELECTORS
+--   tag, .class, #id, compounds (.a.b, div.card), descendant chains
+--   (.list .row.sel), comma lists. Specificity 100/10/1 per id/class/tag.
+--
 -- NOT in v1 (documented so nobody hunts for a bug that's just a gap):
 --   grid, position:absolute/fixed, transforms, transitions, calc(),
---   per-corner border-radius, rounded corners on gradient fills, descendant
---   / pseudo selectors (selectors are flat: tag, .class, #id, comma lists).
+--   per-corner border-radius, rounded corners on gradient fills, child /
+--   sibling combinators (> + ~), pseudo-classes. `align-items: stretch` on
+--   an auto-height row leaves children at their natural height.
 --
 -- LOAD ORDER
 --   KeyasLib / KeyasUI globals are only ever read inside function bodies
@@ -208,7 +213,7 @@ local function parseShadow(str)
     if type(str) ~= "string" or str:match("^%s*none%s*$") then return nil end
     -- pull the colour off the end first (it may contain spaces: rgba(...))
     local colStr = str:match("(#%x+)%s*$")
-                or str:match("(rgba?%b())%s*$")
+                or str:match("(rgba?%([^)]*%))%s*$")
                 or str:match("(%a+)%s*$")
     local nums = {}
     for n in str:gmatch("%-?%d+%.?%d*") do nums[#nums + 1] = tonumber(n) end
@@ -385,7 +390,7 @@ local function applyDecl(into, rawName, rawValue)
     if name == "border" then
         local px = value:match("(%d+%.?%d*)px") or value:match("^(%d+%.?%d*)%s")
         if px then into.borderWidth = tonumber(px) end
-        local col = value:match("(#%x+)") or value:match("(rgba?%b())")
+        local col = value:match("(#%x+)") or value:match("(rgba?%([^)]*%))")
                  or value:match("(%a+)%s*$")
         if col and col ~= "solid" and col ~= "none" then
             into.borderColor = KeyasCSS.color(col)
@@ -441,9 +446,28 @@ local function scaleDecls(decls, k)
     end
 end
 
---- Parses a CSS string into a stylesheet object. Selectors are flat:
---- `tag`, `.class`, `#id`, and comma-separated lists of those. Specificity
---- is the usual (id > class > tag), with source order breaking ties.
+-- A "compound" is one or more simple selectors that must all match the same
+-- node: `.a.b`, `div.card`, `#id.on`. A full selector is a whitespace-
+-- separated chain of compounds (descendant combinator): `.list .row.sel`.
+-- The last compound is the subject; the earlier ones must each match some
+-- ancestor, in order. No `>` / `+` / `~` combinators, no pseudo-classes.
+local function parseCompound(str)
+    if str == "*" then return {{kind = "any"}} end
+    local simples = {}
+    local tag = str:match("^([%a][%w_-]*)")
+    if tag then simples[#simples + 1] = {kind = "tag", name = tag:lower()} end
+    for mark, nm in str:gmatch("([.#])([%w_-]+)") do
+        simples[#simples + 1] = {kind = mark == "#" and "id" or "class", name = nm}
+    end
+    if #simples == 0 then simples[1] = {kind = "any"} end
+    return simples
+end
+
+--- Parses a CSS string into a stylesheet object. Selectors: `tag`,
+--- `.class`, `#id`, compounds (`.a.b`, `div.card`), descendant chains
+--- (`.list .row`), and comma-separated lists of those. Specificity is the
+--- usual 100/10/1 per id/class/tag summed over the whole selector, source
+--- order breaking ties.
 ---
 --- @param opts table optional { scale = <number> } - multiplies every px
 ---   length in the sheet, so you can author at 1x and render at any
@@ -462,27 +486,60 @@ function KeyasCSS.parse(css, opts)
         for sel in selectorList:gmatch("[^,]+") do
             sel = sel:match("^%s*(.-)%s*$")
             if sel ~= "" then
-                local kind, name, spec
-                if sel:sub(1, 1) == "#" then kind, name, spec = "id", sel:sub(2), 100
-                elseif sel:sub(1, 1) == "." then kind, name, spec = "class", sel:sub(2), 10
-                elseif sel == "*" then kind, name, spec = "any", "*", 0
-                else kind, name, spec = "tag", sel:lower(), 1 end
-                rules[#rules + 1] = {kind = kind, name = name, spec = spec, order = #rules, decls = decls}
+                local compounds, spec = {}, 0
+                for part in sel:gmatch("%S+") do
+                    local simples = parseCompound(part)
+                    compounds[#compounds + 1] = simples
+                    for _, s in ipairs(simples) do
+                        if s.kind == "id" then spec = spec + 100
+                        elseif s.kind == "class" then spec = spec + 10
+                        elseif s.kind == "tag" then spec = spec + 1 end
+                    end
+                end
+                if #compounds > 0 then
+                    rules[#rules + 1] = {compounds = compounds, spec = spec, order = #rules, decls = decls}
+                end
             end
         end
     end
     return {rules = rules, scale = k}
 end
 
-local function ruleMatches(rule, node)
-    if rule.kind == "any" then return true end
-    if rule.kind == "id" then return node.id == rule.name end
-    if rule.kind == "tag" then return (node.tag or "div") == rule.name end
-    if rule.kind == "class" then
+local function simpleMatches(s, node)
+    if s.kind == "any" then return true end
+    if s.kind == "id" then return node.id == s.name end
+    if s.kind == "tag" then return (node.tag or "div") == s.name end
+    if s.kind == "class" then
         if not node.class then return false end
-        for c in node.class:gmatch("%S+") do if c == rule.name then return true end end
+        for c in node.class:gmatch("%S+") do if c == s.name then return true end end
+        return false
     end
     return false
+end
+
+local function compoundMatches(cmp, node)
+    for _, s in ipairs(cmp) do
+        if not simpleMatches(s, node) then return false end
+    end
+    return true
+end
+
+--- @param ancestors array of nodes, root first, parent last (may be nil)
+local function ruleMatches(rule, node, ancestors)
+    local comps = rule.compounds
+    if not compoundMatches(comps[#comps], node) then return false end
+    if #comps == 1 then return true end
+    local ai = ancestors and #ancestors or 0
+    for ci = #comps - 1, 1, -1 do
+        local matched = false
+        while ai >= 1 do
+            local anc = ancestors[ai]
+            ai = ai - 1
+            if compoundMatches(comps[ci], anc) then matched = true; break end
+        end
+        if not matched then return false end
+    end
+    return true
 end
 
 --============================================================
@@ -499,6 +556,7 @@ KeyasCSS.Node = Node
 ---   text = "literal string",
 ---   children = { <node or def>, ... },
 ---   onClick = function(node, surface) end,
+---   onPaint = function(node, owner, x, y, w, h, opacity) end,  -- content box, local coords
 ---   key = <any> (opaque, for the consumer's own bookkeeping),
 --- }
 function KeyasCSS.node(def)
@@ -509,6 +567,7 @@ function KeyasCSS.node(def)
     o.id = def.id
     o.text = def.text
     o.onClick = def.onClick
+    o.onPaint = def.onPaint
     o.key = def.key
     o.rawStyle = def.style or {}
     o.children = {}
@@ -530,15 +589,18 @@ local DEFAULTS = {
 }
 
 --- Merges DEFAULTS < matching stylesheet rules (by specificity, then order)
---- < inline style, into node.computed. Recurses to children.
-function Node:resolve(stylesheet)
+--- < inline style, into node.computed. Recurses to children, threading the
+--- ancestor chain so descendant selectors can be evaluated.
+--- @param ancestors internal - array of ancestor nodes, root first (nil at the top call)
+function Node:resolve(stylesheet, ancestors)
+    ancestors = ancestors or {}
     local c = {}
     for k, v in pairs(DEFAULTS) do c[k] = v end
 
     if stylesheet then
         local matched = {}
         for _, rule in ipairs(stylesheet.rules) do
-            if ruleMatches(rule, self) then matched[#matched + 1] = rule end
+            if ruleMatches(rule, self, ancestors) then matched[#matched + 1] = rule end
         end
         table.sort(matched, function(a, b)
             if a.spec ~= b.spec then return a.spec < b.spec end
@@ -569,7 +631,9 @@ function Node:resolve(stylesheet)
     c.shadow = c.boxShadow and parseShadow(c.boxShadow) or nil
 
     self.computed = c
-    for _, ch in ipairs(self.children) do ch:resolve(stylesheet) end
+    ancestors[#ancestors + 1] = self
+    for _, ch in ipairs(self.children) do ch:resolve(stylesheet, ancestors) end
+    ancestors[#ancestors] = nil
 end
 
 --============================================================
@@ -646,10 +710,11 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
     -- border-box width
     local w = lenPx(c.width, availW)
     if w == nil then
-        if isTextLeaf then
-            -- auto width on a text leaf = shrink-wrap to the longest word-run,
-            -- but never wider than what the parent offered. Without this a
-            -- text child in a flex row measures as the probe width (huge).
+        if isTextLeaf and measuring then
+            -- Intrinsic-measurement pass only: shrink-wrap a text leaf to
+            -- its longest unwrapped line so a flex-row sibling can size to
+            -- content. In a real (non-measuring) pass a text leaf fills its
+            -- available width and wraps, like a block <div>.
             local longest = 0
             for _, ln in ipairs(KeyasCSS._wrapLines(node.text, math.huge, c.font)) do
                 longest = math.max(longest, (KeyasCSS._measure(ln, c.font)))
@@ -684,14 +749,24 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
         local gap = c.gap or 0
         local mainAvail = dir == "row" and cw or (lenPx(c.height, availH)
             and (lenPx(c.height, availH) - 2 * bd - pT - pB) or nil)
-        -- 1. base main sizes
+        -- 1. base main sizes. A child with flex-grow > 0 and no explicit
+        --    main size starts from 0 (like CSS `flex: 1` -> flex-basis 0):
+        --    it is sized entirely by the free-space distribution below, so
+        --    it fills the leftover instead of measuring its content as its
+        --    base (which would overflow the row).
         local bases, grows, totalBase, totalGrow = {}, {}, 0, 0
         for i, ch in ipairs(kids) do
-            local b = intrinsicMain(ch, dir, dir == "row" and (cw) or (cw))
+            local grow = tonumber(ch.computed.flexGrow) or 0
+            local explicitMain = lenPx(dir == "row" and ch.computed.width or ch.computed.height,
+                                       dir == "row" and cw or nil)
+            local b
+            if explicitMain then b = explicitMain
+            elseif grow > 0 then b = 0
+            else b = intrinsicMain(ch, dir, cw) end
             bases[i] = b
-            grows[i] = tonumber(ch.computed.flexGrow) or 0
+            grows[i] = grow
             totalBase = totalBase + b
-            totalGrow = totalGrow + grows[i]
+            totalGrow = totalGrow + grow
         end
         local freeMain
         if dir == "row" then
@@ -727,57 +802,58 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
                 cursor = (slack / #kids) / 2
             end
         end
-        -- 4. place each child
+        -- 4. place each child along the main axis at its natural cross size,
+        --    tracking the largest cross extent...
+        local rowCrossAvail  -- known cross size for a row = explicit height; nil until measured
+        if dir == "row" then
+            local eh = lenPx(c.height, availH)
+            if eh then rowCrossAvail = eh - 2 * bd - pT - pB end
+        end
+        local placed = {}       -- {node, mainPos, crossMbSize}
         local maxCross = 0
         for i, ch in ipairs(kids) do
             local chC = ch.computed
-            local crossBoxAvail = dir == "row"
-                and (lenPx(c.height, availH) and (lenPx(c.height, availH) - 2*bd - pT - pB) or cw)
-                or cw
-            -- cross size
-            local crossExplicit = lenPx(dir == "row" and chC.height or chC.width,
-                                        dir == "row" and crossBoxAvail or cw)
             local childMain = sizes[i]
-            local childCross
-            if c.alignItems == "stretch" and not crossExplicit then
-                childCross = dir == "row" and crossBoxAvail or cw
-            else
-                childCross = crossExplicit
+            local crossExplicit = lenPx(dir == "row" and chC.height or chC.width,
+                                        dir == "row" and (rowCrossAvail) or cw)
+            -- stretch (the default): fill the cross axis when it's known
+            local stretch = (c.alignItems == "stretch") and not crossExplicit
+            local childCross = crossExplicit
+            if stretch then
+                if dir == "row" then childCross = rowCrossAvail  -- may be nil -> natural, aligned as flex-start
+                else childCross = cw end
             end
 
-            local cxPos, cyPos, offW, offH
             if dir == "row" then
-                cxPos = inX + cursor
-                offW = childMain
-                offH = childCross
+                layoutNode(ch, inX + cursor, inY, childMain, childCross or math.huge, measuring)
+                local mb = ch.box.h + chC.marginTop + chC.marginBottom
+                placed[i] = {node = ch, cross = mb}
+                maxCross = math.max(maxCross, mb)
+                cursor = cursor + ch.box.w + chC.marginLeft + chC.marginRight + between
             else
-                cyPos = inY + cursor
-                offH = childMain
-                offW = childCross
-            end
-
-            -- realise child (final)
-            if dir == "row" then
-                layoutNode(ch, cxPos, inY, offW, offH or crossBoxAvail, measuring)
-                -- cross align
-                local realCrossH = ch.box.h + chC.marginTop + chC.marginBottom
-                local crossSlack = crossBoxAvail - realCrossH
-                if c.alignItems == "center" then ch:_shift(0, crossSlack / 2)
-                elseif c.alignItems == "flex-end" then ch:_shift(0, crossSlack) end
-                maxCross = math.max(maxCross, realCrossH)
-                cursor = cursor + (ch.box.w + chC.marginLeft + chC.marginRight) + between
-            else
-                layoutNode(ch, inX, cyPos, offW or cw, offH, measuring)
-                local realCrossW = ch.box.w + chC.marginLeft + chC.marginRight
-                local crossSlack = cw - realCrossW
-                if c.alignItems == "center" then ch:_shift(crossSlack / 2, 0)
-                elseif c.alignItems == "flex-end" then ch:_shift(crossSlack, 0) end
-                maxCross = math.max(maxCross, realCrossW)
-                cursor = cursor + (ch.box.h + chC.marginTop + chC.marginBottom) + between
+                layoutNode(ch, inX, inY + cursor, childCross or cw, childMain, measuring)
+                local mb = ch.box.w + chC.marginLeft + chC.marginRight
+                local slack = cw - mb
+                if c.alignItems == "center" then ch:_shift(slack / 2, 0)
+                elseif c.alignItems == "flex-end" then ch:_shift(slack, 0) end
+                maxCross = math.max(maxCross, mb)
+                cursor = cursor + ch.box.h + chC.marginTop + chC.marginBottom + between
             end
         end
+
         if dir == "row" then
-            contentH = maxCross
+            -- ...then, now that the row's cross extent is known, align each
+            --    child within it (skip for stretch with an unknown height -
+            --    those stay top-aligned at natural height, a v1 limitation).
+            local crossExtent = rowCrossAvail or maxCross
+            for _, p in ipairs(placed) do
+                local slack = crossExtent - p.cross
+                if slack ~= 0 then
+                    if c.alignItems == "center" then p.node:_shift(0, slack / 2)
+                    elseif c.alignItems == "flex-end" then p.node:_shift(0, slack) end
+                end
+            end
+            contentH = crossExtent
         else
             contentH = cursor - between  -- last `between` overshoots
             if #kids == 0 then contentH = 0 end
@@ -933,7 +1009,16 @@ function Node:paint(owner, parentOpacity)
         end
     end
 
-    -- 6. children
+    -- 6. custom paint hook - the escape hatch for anything KeyasCSS can't
+    --    express declaratively (an icon from a spritesheet, a mini-map, a
+    --    sparkline). Called with the CONTENT box in the same local space
+    --    the rest of paint() uses, after this node's own bg/text and before
+    --    its children, so children still draw on top.
+    if self.onPaint then
+        pcall(self.onPaint, self, owner, b.cx, b.cy, b.cw, b.ch, op)
+    end
+
+    -- 7. children
     for _, ch in ipairs(self.children) do
         if (ch.computed.display or "block") ~= "none" then
             ch:paint(owner, op)
@@ -984,7 +1069,9 @@ local Surface = ISPanel:derive("KeyasCSS.Surface")
 KeyasCSS.Surface = Surface
 
 --- @param opts { stylesheet = <KeyasCSS.parse result>, root = <node or def>,
----               padding = <px>, background = <color>, onClickMiss = fn }
+---               padding = <px>, background = <color>,
+---               onClickMiss = fn,      -- click inside the surface but on no onClick node
+---               onClickOutside = fn }  -- click anywhere outside the surface
 function Surface:new(x, y, w, h, opts)
     local o = ISPanel:new(x, y, w, h)
     setmetatable(o, self); self.__index = self
@@ -992,6 +1079,7 @@ function Surface:new(x, y, w, h, opts)
     o.stylesheet = opts.stylesheet
     o.pad = opts.padding or 0
     o.onClickMiss = opts.onClickMiss
+    o.onClickOutside = opts.onClickOutside
     o.backgroundColor = KeyasCSS.color(opts.background) or {r = 0, g = 0, b = 0, a = 0}
     o.borderColor = {r = 0, g = 0, b = 0, a = 0}
     o.moveWithMouse = false
@@ -1051,5 +1139,10 @@ function Surface:onMouseUp(x, y)
 end
 
 function Surface:onMouseDown(x, y) return true end  -- claim the click so onMouseUp fires
+
+function Surface:onMouseDownOutside(x, y)
+    if self.onClickOutside then pcall(self.onClickOutside, self) end
+    if ISPanel.onMouseDownOutside then ISPanel.onMouseDownOutside(self, x, y) end
+end
 
 return KeyasCSS

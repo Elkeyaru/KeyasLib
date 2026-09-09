@@ -69,7 +69,7 @@ end
 ## KeyasLib (shared config)
 
 ```lua
-KeyasLib.VERSION            -- "1.2.1"
+KeyasLib.VERSION            -- "1.2.2"
 KeyasLib.DEBUG              -- false by default
 KeyasLib.debugPrint(...)    -- prints "[KeyasLib] ..." only when DEBUG is true
 KeyasLib.MODDATA_PREFIX     -- "KeyasLib_" - reserved for KeyasLib's own ModData keys
@@ -163,12 +163,16 @@ to load, they degrade to plain rectangles rather than erroring.
 | text | `color`, `line-height`, `text-align`, `font` (**redefined**: names a font registered with `KeyasUI.registerFont`; with none, falls back to vanilla `UIFont`) |
 | clipping | `overflow: hidden` (via `setStencilRect`) |
 
-Selectors are flat: `tag`, `.class`, `#id`, and comma-separated lists.
-Specificity is the usual id > class > tag, source order breaking ties.
+Selectors: `tag`, `.class`, `#id`, compounds (`.a.b`, `div.card`),
+descendant chains (`.list .row.sel`), and comma-separated lists of those.
+Specificity is the usual 100/10/1 per id/class/tag summed over the whole
+selector, source order breaking ties.
 
 **Not in v1:** grid, `position: absolute/fixed`, transforms, transitions,
 `calc()`, per-corner `border-radius`, rounded corners *on* gradient fills
-(gradient backgrounds paint square-cornered), descendant/pseudo selectors.
+(gradient backgrounds paint square-cornered), child/sibling combinators
+(`>` `+` `~`), pseudo-classes. `align-items: stretch` on a row whose
+height is `auto` leaves children at their natural height (top-aligned).
 
 ### Rendering at any resolution
 

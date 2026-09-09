@@ -2,6 +2,38 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.2] - KeyasCSS hardening from the first real consumer (LP_Computer)
+
+Porting Last Purpose's computer GUI onto KeyasCSS surfaced four things the
+engine needed. All additive / bug-fix; nothing changes an existing call.
+
+### KeyasCSS
+
+- **Compound + descendant selectors.** `.a.b`, `div.card`, `.list .row.sel`
+  now match (previously only a single `tag` / `.class` / `#id`). Specificity
+  is 100/10/1 per id/class/tag summed over the whole selector. `resolve()`
+  threads the ancestor chain to evaluate descendant selectors; its
+  signature gains an internal `ancestors` param (safe to ignore - it
+  defaults).
+- **`node.onPaint = function(node, owner, x, y, w, h, opacity) end`** - a
+  per-node draw hook, called with the content box in the same local space
+  as the rest of `paint()`, after the node's own background/text and before
+  its children. The escape hatch for anything not expressible in CSS: an
+  icon from a spritesheet, a mini-map, a sparkline.
+- **`Surface` gains `onClickOutside`** (fires on a click anywhere outside
+  the surface) alongside the existing `onClickMiss`.
+- **Flex sizing fixes:** a flex child with `flex-grow > 0` and no explicit
+  main size now starts from a 0 base (CSS `flex: 1` behaviour) and fills
+  the leftover space instead of measuring its content as its base and
+  overflowing the row. A text leaf with `auto` width now fills its
+  container and wraps (like a block `<div>`) in a normal layout pass, and
+  only shrink-wraps to its content during intrinsic measurement (so a
+  flex-row sibling can still size to it). Flex-row cross-axis alignment
+  (`align-items: center` / `flex-end`) is now a proper second pass once the
+  row's height is known, instead of aligning against the row's *width*.
+- `%b()` patterns (which Kahlua doesn't implement) removed from the colour
+  parsers.
+
 ## [1.2.1] - KeyasCSS resolution scaling + the XCYOS reference
 
 ### KeyasCSS
