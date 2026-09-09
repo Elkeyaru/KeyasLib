@@ -2,6 +2,23 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.3] - KeyasCSS: side-longhand spacing crash
+
+`margin-top` / `padding-left` / ... (the per-side longhand spacing
+properties, as opposed to the `margin: 5px 9px` shorthand) fell through
+`applyDecl`'s dispatch and were stored as the raw string (`"6px"`). Layout
+then did `y + marginTop` -> in PZ's Kahlua that is a hard
+`__add not defined for operands` exception, not a soft nil, so a single
+such declaration took the whole GUI down every frame. `LP_Computer`'s
+stylesheet uses these heavily.
+
+- `applyDecl` now parses `marginTop/Right/Bottom/Left` and
+  `paddingTop/Right/Bottom/Left` to numbers.
+- `Node:resolve` additionally coerces every length field the layout code
+  adds (`margin*`, `padding*`, `borderWidth`, `borderRadius`, `gap`,
+  `flexGrow`, `opacity`, `lineHeight`) to a number as a backstop, so a
+  stray unit string can never reach an arithmetic op again.
+
 ## [1.2.2] - KeyasCSS hardening from the first real consumer (LP_Computer)
 
 Porting Last Purpose's computer GUI onto KeyasCSS surfaced four things the

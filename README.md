@@ -69,7 +69,7 @@ end
 ## KeyasLib (shared config)
 
 ```lua
-KeyasLib.VERSION            -- "1.2.2"
+KeyasLib.VERSION            -- "1.2.3"
 KeyasLib.DEBUG              -- false by default
 KeyasLib.debugPrint(...)    -- prints "[KeyasLib] ..." only when DEBUG is true
 KeyasLib.MODDATA_PREFIX     -- "KeyasLib_" - reserved for KeyasLib's own ModData keys

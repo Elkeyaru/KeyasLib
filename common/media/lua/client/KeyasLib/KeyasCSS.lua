@@ -387,6 +387,13 @@ local function applyDecl(into, rawName, rawValue)
         return
     end
 
+    -- side longhands: margin-top / padding-left / ... -> a plain number.
+    -- (canonProp has already turned them into marginTop / paddingLeft.)
+    if name:match("^margin[TRBL]") or name:match("^padding[TRBL]") then
+        into[name] = tonumber((value:gsub("px", ""))) or 0
+        return
+    end
+
     if name == "border" then
         local px = value:match("(%d+%.?%d*)px") or value:match("^(%d+%.?%d*)%s")
         if px then into.borderWidth = tonumber(px) end
@@ -626,6 +633,19 @@ function Node:resolve(stylesheet, ancestors)
     -- normalise colour-ish fields that might still be strings
     for _, k in ipairs({"backgroundColor", "borderColor", "color"}) do
         if type(c[k]) == "string" then c[k] = KeyasCSS.color(c[k]) end
+    end
+    -- guarantee every length the layout code adds is a real number - a
+    -- stray "6px" reaching `oy + marginTop` is an unrecoverable Kahlua
+    -- error, not a soft nil.
+    for _, k in ipairs({"marginTop", "marginRight", "marginBottom", "marginLeft",
+        "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
+        "borderWidth", "borderRadius", "gap", "flexGrow", "opacity"}) do
+        if type(c[k]) ~= "number" then
+            c[k] = tonumber((tostring(c[k]):gsub("px", ""))) or (k == "opacity" and 1 or 0)
+        end
+    end
+    if c.lineHeight ~= nil and type(c.lineHeight) ~= "number" then
+        c.lineHeight = tonumber((tostring(c.lineHeight):gsub("px", "")))
     end
     c.gradient = c.backgroundImage and parseGradient(c.backgroundImage) or nil
     c.shadow = c.boxShadow and parseShadow(c.boxShadow) or nil
