@@ -69,7 +69,7 @@ end
 ## KeyasLib (shared config)
 
 ```lua
-KeyasLib.VERSION            -- "1.2.4"
+KeyasLib.VERSION            -- "1.2.5"
 KeyasLib.DEBUG              -- false by default
 KeyasLib.debugPrint(...)    -- prints "[KeyasLib] ..." only when DEBUG is true
 KeyasLib.MODDATA_PREFIX     -- "KeyasLib_" - reserved for KeyasLib's own ModData keys
@@ -306,6 +306,12 @@ Building the atlas: see `tools/font_atlas_gen/README.md`.
 ```lua
 KeyasZones.register("bank_vault", {
     bbox = {minX=1000, maxX=1010, minY=2000, maxY=2010, minZ=0, maxZ=0},
+    shell = 4,               -- optional: only scan within 4 tiles of a bbox
+                             --   edge (the building's outer ring). Interior
+                             --   doors never need sealing, so for a mostly
+                             --   hollow building this turns an O(w*h) scan
+                             --   into O(w+h). If the found-entry count comes
+                             --   out too low, raise it or tighten the bbox.
     active = function()
         return MyMod.alarmActive -- polled on every check; return a boolean
     end,
@@ -319,6 +325,12 @@ KeyasZones.unregister("bank_vault")
 
 -- if you place/remove a door or window inside the bbox at runtime:
 KeyasZones.rescan("bank_vault")
+
+-- the entries the zone found, as { kind = "window"|"door"|"thumpable",
+-- ref = <IsoObject> } - reuse this instead of scanning the building again:
+for _, e in ipairs(KeyasZones.getEntries("bank_vault")) do
+    e.ref:setPermaLocked(true)
+end
 ```
 
 While a zone is active, `ISSmashWindow`, `ISOpenCloseDoor`,

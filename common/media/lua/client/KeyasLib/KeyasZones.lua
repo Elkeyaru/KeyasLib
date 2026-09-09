@@ -242,11 +242,46 @@ local function classifyEntry(obj)
     return nil
 end
 
---- Scans every grid square in a zone's bbox for sealable entries and
---- caches them as "known entries". Runs at register(), automatically
---- again for zones the local player is near (see the EveryOneMinute
---- proximity rescan below), and on demand via the public rescan().
-local function scanZoneEntries(bbox)
+--- The (x, y) columns to inspect for a bbox. With no `shell` this is every
+--- column in the bbox (the whole footprint). With `shell = N` it is only
+--- the columns within N tiles of a bbox edge - the building's outer shell -
+--- which is what a seal actually cares about: interior doors/windows never
+--- need sealing, and skipping the hollow middle turns an O(w*h) scan into
+--- an O(2*N*(w+h)) one. Falls back to the full footprint when the bbox is
+--- too small for a ring to make sense (< 2N on either axis).
+local function zoneColumns(bbox, shell)
+    local x0, x1, y0, y1 = bbox.minX, bbox.maxX, bbox.minY, bbox.maxY
+    local n = tonumber(shell)
+    if not n or n < 1 or (x1 - x0) < (2 * n) or (y1 - y0) < (2 * n) then
+        local cols = {}
+        for x = x0, x1 do
+            for y = y0, y1 do cols[#cols + 1] = {x, y} end
+        end
+        return cols
+    end
+
+    local seen, cols = {}, {}
+    local function add(x, y)
+        local key = x .. ":" .. y
+        if not seen[key] then seen[key] = true; cols[#cols + 1] = {x, y} end
+    end
+    -- top + bottom bands (full width, N deep)
+    for x = x0, x1 do
+        for d = 0, n - 1 do add(x, y0 + d); add(x, y1 - d) end
+    end
+    -- left + right bands (full height, N deep)
+    for y = y0, y1 do
+        for d = 0, n - 1 do add(x0 + d, y); add(x1 - d, y) end
+    end
+    return cols
+end
+
+--- Scans a zone's sealable entries and caches them as "known entries".
+--- Runs at register(), automatically again for zones the local player is
+--- near (see the EveryOneMinute proximity rescan below), and on demand via
+--- the public rescan(). `shell` (optional) restricts the scan to the
+--- building's outer ring - see zoneColumns().
+local function scanZoneEntries(bbox, shell)
     local entries = {}
     local okCell, cell = pcall(getCell)
     if not okCell or not cell then
@@ -254,22 +289,22 @@ local function scanZoneEntries(bbox)
         return entries
     end
 
-    for x = bbox.minX, bbox.maxX do
-        for y = bbox.minY, bbox.maxY do
-            for z = bbox.minZ, bbox.maxZ do
-                local okSq, square = pcall(cell.getGridSquare, cell, x, y, z)
-                if okSq and square then
-                    local okObjs, objects = pcall(square.getObjects, square)
-                    if okObjs and objects then
-                        local okSize, size = pcall(objects.size, objects)
-                        if okSize then
-                            for i = 0, size - 1 do
-                                local okGet, obj = pcall(objects.get, objects, i)
-                                if okGet and obj then
-                                    local kind = classifyEntry(obj)
-                                    if kind then
-                                        table.insert(entries, {kind = kind, ref = obj})
-                                    end
+    local columns = zoneColumns(bbox, shell)
+    for _, c in ipairs(columns) do
+        local x, y = c[1], c[2]
+        for z = bbox.minZ, bbox.maxZ do
+            local okSq, square = pcall(cell.getGridSquare, cell, x, y, z)
+            if okSq and square then
+                local okObjs, objects = pcall(square.getObjects, square)
+                if okObjs and objects then
+                    local okSize, size = pcall(objects.size, objects)
+                    if okSize then
+                        for i = 0, size - 1 do
+                            local okGet, obj = pcall(objects.get, objects, i)
+                            if okGet and obj then
+                                local kind = classifyEntry(obj)
+                                if kind then
+                                    table.insert(entries, {kind = kind, ref = obj})
                                 end
                             end
                         end
@@ -365,7 +400,7 @@ local function onEveryOneMinuteRescanNearbyZones()
             local cx, cy = bboxCenter(zone.bbox)
             local dx, dy = px - cx, py - cy
             if (dx * dx + dy * dy) <= (RESCAN_TRIGGER_DISTANCE * RESCAN_TRIGGER_DISTANCE) then
-                zone.entries = scanZoneEntries(zone.bbox)
+                zone.entries = scanZoneEntries(zone.bbox, zone.shell)
                 dprint("KeyasZones: auto-rescanned zone '" .. tostring(id) .. "' (" .. tostring(#zone.entries) .. " entries)")
             end
         end
@@ -383,6 +418,14 @@ pcall(function() Events.EveryOneMinute.Add(onEveryOneMinuteRescanNearbyZones) en
 ---   bbox = {minX,maxX,minY,maxY,minZ,maxZ},
 ---   active = function() -> boolean end,   -- polled every check
 ---   warn = function(player) end,          -- optional, rate-limited to 1/2s per player
+---   shell = number,                       -- optional: only scan within this many
+---                                         --   tiles of a bbox edge (the building's
+---                                         --   outer ring). Interior doors/windows
+---                                         --   never need sealing, so for a mostly
+---                                         --   hollow building this is a big win. If
+---                                         --   the found-entry count comes out too
+---                                         --   low, the bbox has padding - raise
+---                                         --   shell or tighten the bbox.
 --- }
 function KeyasZones.register(id, def)
     if not id or not def or not def.bbox or type(def.active) ~= "function" then
@@ -393,7 +436,8 @@ function KeyasZones.register(id, def)
         bbox = def.bbox,
         active = def.active,
         warn = def.warn,
-        entries = scanZoneEntries(def.bbox),
+        shell = def.shell,
+        entries = scanZoneEntries(def.bbox, def.shell),
         lastWarnMs = {},
     }
     dprint("KeyasZones: registered zone '" .. tostring(id) .. "' with " .. tostring(#zones[id].entries) .. " known entries")
@@ -405,8 +449,21 @@ end
 function KeyasZones.rescan(id)
     local zone = zones[id]
     if not zone then return false end
-    zone.entries = scanZoneEntries(zone.bbox)
+    zone.entries = scanZoneEntries(zone.bbox, zone.shell)
     return true
+end
+
+--- The zone's currently-known sealable entries, as an array of
+--- { kind = "window"|"door"|"thumpable", ref = <IsoObject> }. A shallow
+--- copy, so mutating the returned table doesn't disturb the zone. Lets a
+--- consumer reuse this list (e.g. to lock the same doors) instead of
+--- scanning the building a second time itself. Returns {} for an unknown id.
+function KeyasZones.getEntries(id)
+    local zone = zones[id]
+    if not zone then return {} end
+    local out = {}
+    for i, e in ipairs(zone.entries) do out[i] = e end
+    return out
 end
 
 --- Unregisters a zone: any windows/doors it was actively holding closed

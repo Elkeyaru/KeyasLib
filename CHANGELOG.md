@@ -2,6 +2,27 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.5] - KeyasZones: shell scan + getEntries
+
+`KeyasZones` scanned the whole bbox *volume* for sealable entries. For a
+mostly hollow building (a bank) that is almost all wasted work - interior
+doors and windows never need sealing - and the consumer (Last Purpose)
+was scanning the same volume a second time for its own locking.
+
+- **`register(id, { ..., shell = N })`** restricts the scan to grid
+  columns within `N` tiles of a bbox edge - the building's outer ring.
+  O(w*h) -> O(2*N*(w+h)). Falls back to the full footprint when the bbox
+  is smaller than `2N` on either axis. `rescan()` and the automatic
+  proximity rescan honour it too.
+- **`KeyasZones.getEntries(id)`** returns the zone's known entries
+  (`{ kind, ref }`, a shallow copy) so a consumer can reuse that list -
+  e.g. to lock the same doors - instead of walking the building itself.
+
+Last Purpose's `LP_BankSecurity` now passes `shell = 5` and drives its
+door-locking off `getEntries`, dropping its own perimeter triple-loop:
+one cheap ring scan per minute near the bank instead of two full-volume
+scans.
+
 ## [1.2.4] - KeyasCSS: inline camelCase keys + container shrink-wrap
 
 - **Inline `style` camelCase keys now resolve.** `canonProp` was
