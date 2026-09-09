@@ -1,5 +1,7 @@
 name=KeyasLib
-description=Shared utility library for Keyaru mods: retro ISUI toolkit with a bitmap-font renderer, a zone-sealing system for doors/windows, and player-requirement helpers. Adds no content of its own - other mods depend on it with require=KeyasLib.
+description=Libreria de utilidades para los mods de Keyaru en Build 42. Toolkit de UI ISUI estilo terminal retro con renderizador de fuente por atlas de glifos y sistema de skins (chrome horneado como PNG: esquinas redondeadas, degradados y sombras que ISUI no puede dibujar), sellado de puertas y ventanas por zona, y ayudantes de requisitos del jugador. No agrega contenido propio: otros mods dependen con require=KeyasLib.
+poster=poster.png
 id=KeyasLib
-versionMin=42.0
-modversion=1.0.1
+versionMin=42.20.4
+modversion=1.1.0
+author=ElKeyaru

@@ -393,9 +393,71 @@ function KeyasUI.wrapped(self, str, x, y, w, colorRGB, fontId)
 end
 
 --============================================================
+-- Skins - the "break the flat-rect ceiling" path.
+--
+-- ISUI has no rounded corners, no gradient fills, no drop shadows. But it
+-- CAN stretch a texture. So the entire fixed chrome of a designed GUI
+-- (bezel, gradients, bevels, shadows, decorative art, vignette) is baked
+-- ONCE into a single PNG offline (see tools/skin_gen), and at runtime a
+-- KeyasUI.Window with options.skin just draws that PNG scaled to fill,
+-- then lets the consumer paint the *dynamic* content into named zones.
+--
+-- registerSkin(id, def):
+--   def.chromePath : media path to the baked PNG
+--   def.bakeW/H    : the PNG's authoring size in px (zone coords are in this space)
+--   def.zones      : { name = {x, y, w, h}, ... } content rectangles in bake space
+--   def.spec       : alternatively, a table (e.g. require of a generated
+--                    zones.lua) that carries bakeW/bakeH/zones; inline
+--                    fields above win over spec fields.
+--
+-- On a KeyasUI.Window: options.skin = "<id>" makes the window size itself
+-- to the skin's aspect ratio at ~95% of the screen (centred), draw the
+-- chrome, and expose window:zone("name") -> x,y,w,h in panel coords, plus
+-- window:addZoneButton("name", fn) for a transparent click target over a
+-- baked button. It never pauses the game (it isn't screen-sized).
+--============================================================
+KeyasUI._skins = {}
+
+function KeyasUI.registerSkin(id, def)
+    def = def or {}
+    local spec = def.spec or {}
+    local bakeW = def.bakeW or spec.bakeW
+    local bakeH = def.bakeH or spec.bakeH
+    local zones = def.zones or spec.zones
+    if not id or not def.chromePath or not bakeW or not bakeH or type(zones) ~= "table" then
+        print("[KeyasUI] ERROR: registerSkin needs id, chromePath, bakeW, bakeH and a zones table")
+        return false
+    end
+    KeyasUI._skins[id] = {
+        chromePath = def.chromePath, bakeW = bakeW, bakeH = bakeH,
+        zones = zones, texture = nil, triedLoad = false,
+    }
+    return true
+end
+
+function KeyasUI.getSkin(id)
+    local s = id and KeyasUI._skins[id]
+    if not s then return nil end
+    if not s.triedLoad then
+        s.triedLoad = true
+        local ok, tex = pcall(getTexture, s.chromePath)
+        if ok and tex then
+            s.texture = tex
+        else
+            print("[KeyasUI] ERROR: skin chrome failed to load: " .. tostring(s.chromePath) .. " (skin '" .. tostring(id) .. "')")
+        end
+    end
+    return s
+end
+
+--============================================================
 -- KeyasUI.Window - base class for retro-OS style windows.
 --
--- Two modes:
+-- Three modes:
+--   options.skin = "<id>"      -> draws a baked chrome PNG scaled to fill;
+--                                 no title bar / bevel / status bar drawn
+--                                 (all baked). window:zone()/addZoneButton()
+--                                 place dynamic content. Does not pause.
 --   options.fullscreen = true  -> opaque, fills the screen, no title-bar
 --                                 drag, closes like any other window.
 --   options.fullscreen = false (default) -> centered window with a
@@ -423,26 +485,83 @@ local CLOSE_BUTTON_SIZE = 16
 ---              falls back to KeyasUI.PALETTE for any color it doesn't set),
 --- }
 function Window:new(x, y, width, height, options)
+    options = options or {}
+
+    -- Skin mode overrides x/y/w/h: fit the skin's aspect ratio into ~95% of
+    -- the screen, centred. Not screen-sized -> PZ doesn't pause the game.
+    local skinId = options.skin
+    if skinId then
+        local skin = KeyasUI.getSkin(skinId)
+        if skin then
+            local okS, sw = pcall(getCore().getScreenWidth, getCore())
+            local okS2, sh = pcall(getCore().getScreenHeight, getCore())
+            if okS and okS2 and sw and sh then
+                local sc = math.min(sw * 0.95 / skin.bakeW, sh * 0.95 / skin.bakeH)
+                width = math.floor(skin.bakeW * sc)
+                height = math.floor(skin.bakeH * sc)
+                x = math.floor((sw - width) / 2)
+                y = math.floor((sh - height) / 2)
+            end
+        else
+            skinId = nil -- skin didn't load; fall back to a normal window
+        end
+    end
+
     local o = ISPanel:new(x, y, width, height)
     setmetatable(o, self)
     self.__index = self
 
-    o.options = options or {}
-    o.title = o.options.title or ""
-    o.fullscreen = o.options.fullscreen or false
-    o.showStatusBar = o.options.showStatusBar or false
-    o.statusText = o.options.statusText or ""
-    o.closeOnEscape = (o.options.closeOnEscape ~= false)
-    o.closeOnClickOutside = (o.options.closeOnClickOutside ~= false)
-    o.palette = o.options.palette
+    o.options = options
+    o.title = options.title or ""
+    o.skinId = skinId
+    o.fullscreen = (not skinId) and (options.fullscreen or false)
+    o.showStatusBar = (not skinId) and (options.showStatusBar or false)
+    o.statusText = options.statusText or ""
+    o.closeOnEscape = (options.closeOnEscape ~= false)
+    o.closeOnClickOutside = (options.closeOnClickOutside ~= false)
+    o.palette = options.palette
 
-    o.moveWithMouse = not o.fullscreen
-    o.backgroundColor = {r = 0, g = 0, b = 0, a = 1}
+    o.moveWithMouse = false
+    o.backgroundColor = {r = 0, g = 0, b = 0, a = skinId and 0 or 1}
     o.borderColor = {r = 0, g = 0, b = 0, a = 0}
 
-    o._keyHandler = nil -- bound in addToUIManager, cleared in close()
+    o._zoneButtons = {}     -- { {name=, btn=} } - repositioned on layout()
+    o._keyHandler = nil     -- bound in addToUIManager, cleared in close()
 
     return o
+end
+
+--- Skin-mode: content rectangle `name` (from registerSkin's zones) in
+--- panel-local coordinates. Returns x, y, w, h - or nil if the window has
+--- no skin or the zone name is unknown.
+function Window:zone(name)
+    if not self.skinId then return nil end
+    local skin = KeyasUI.getSkin(self.skinId)
+    local z = skin and skin.zones[name]
+    if not z then return nil end
+    local sc = self._skinScale or (self:getWidth() / skin.bakeW)
+    return math.floor(z[1] * sc), math.floor(z[2] * sc),
+           math.floor(z[3] * sc), math.floor(z[4] * sc)
+end
+
+--- Skin-mode: a transparent ISButton over a baked button's zone. `onClick`
+--- is called with (window) as self. `opts.hover` = {r,g,b,a} tint on hover.
+function Window:addZoneButton(name, onClick, opts)
+    opts = opts or {}
+    local zx, zy, zw, zh = self:zone(name)
+    if not zx then
+        dprint("KeyasUI.Window:addZoneButton - unknown zone '" .. tostring(name) .. "'")
+        return nil
+    end
+    local btn = ISButton:new(zx, zy, zw, zh, "", self, function(self2) onClick(self2) end)
+    btn:initialise(); btn:instantiate()
+    btn.backgroundColor = { r = 0, g = 0, b = 0, a = 0 }
+    btn.backgroundColorMouseOver = opts.hover or { r = 1, g = 1, b = 1, a = 0.08 }
+    btn.borderColor = { r = 0, g = 0, b = 0, a = 0 }
+    btn.textColor = { r = 0, g = 0, b = 0, a = 0 }
+    self:addChild(btn)
+    table.insert(self._zoneButtons, { name = name, btn = btn })
+    return btn
 end
 
 function Window:initialise()
@@ -452,7 +571,9 @@ end
 function Window:createChildren()
     ISPanel.createChildren(self)
 
-    if not self.fullscreen then
+    -- Skin windows have their close button baked into the chrome; the
+    -- consumer wires it with addZoneButton("close", ...) if they want one.
+    if not self.fullscreen and not self.skinId then
         self.closeButton = ISButton:new(
             self:getWidth() - CLOSE_BUTTON_SIZE - 2, 2,
             CLOSE_BUTTON_SIZE, CLOSE_BUTTON_SIZE,
@@ -484,6 +605,17 @@ function Window:layout()
         end
     end
 
+    if self.skinId then
+        local skin = KeyasUI.getSkin(self.skinId)
+        self._skinScale = skin and (w / skin.bakeW) or 1
+        for _, zb in ipairs(self._zoneButtons) do
+            local zx, zy, zw, zh = self:zone(zb.name)
+            if zx then zb.btn:setX(zx); zb.btn:setY(zy); zb.btn:setWidth(zw); zb.btn:setHeight(zh) end
+        end
+        self.contentY, self.contentWidth, self.contentHeight = 0, w, h
+        return
+    end
+
     if self.closeButton then
         self.closeButton:setX(w - CLOSE_BUTTON_SIZE - 2)
         self.closeButton:setY(2)
@@ -498,15 +630,26 @@ function Window:render()
     ISPanel.render(self)
 
     -- Guards against a subclass (or an unusual init order) reaching
-    -- render() before layout() has ever run - contentY/contentHeight/
-    -- contentWidth would otherwise be nil and every draw call below would
-    -- error.
+    -- render() before layout() has ever run.
     if not self.contentHeight then self:layout() end
 
     local w, h = self:getWidth(), self:getHeight()
-    local panelColor = paletteColor(self.palette, "panel")
 
-    KeyasUI.rect(self, 0, self.contentY, w, self.contentHeight, panelColor)
+    if self.skinId then
+        local skin = KeyasUI.getSkin(self.skinId)
+        if skin and skin.texture then
+            local ok = pcall(function()
+                self:drawTextureScaled(skin.texture, 0, 0, w, h, 1, 1, 1, 1)
+            end)
+            if not ok then dprint("KeyasUI.Window: skin drawTextureScaled failed") end
+        else
+            KeyasUI.rect(self, 0, 0, w, h, paletteColor(self.palette, "panel"))
+        end
+        if self.onRenderContent then self:onRenderContent(0, 0, w, h) end
+        return
+    end
+
+    KeyasUI.rect(self, 0, self.contentY, w, self.contentHeight, paletteColor(self.palette, "panel"))
     if not self.fullscreen then
         KeyasUI.bevel(self, 0, 0, w, h, true, self.palette)
         KeyasUI.titleBar(self, 0, 0, w, TITLE_BAR_HEIGHT, self.title, self.palette)
@@ -529,11 +672,15 @@ end
 --- it to the title strip and otherwise defer to the base implementation
 --- (which still handles focus/click bookkeeping).
 function Window:onMouseDown(x, y)
-    if not self.fullscreen and y > TITLE_BAR_HEIGHT then
+    -- Skin and fullscreen windows never drag. A plain window drags only by
+    -- its title strip.
+    if self.skinId or self.fullscreen then
         self.moveWithMouse = false
-        return ISPanel.onMouseDown(self, x, y)
+    elseif y <= TITLE_BAR_HEIGHT then
+        self.moveWithMouse = true
+    else
+        self.moveWithMouse = false
     end
-    self.moveWithMouse = not self.fullscreen
     return ISPanel.onMouseDown(self, x, y)
 end
 

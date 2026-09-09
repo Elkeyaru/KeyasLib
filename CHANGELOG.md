@@ -2,6 +2,72 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.1.0] - Skin system (reproduce a designed GUI 1:1)
+
+ISUI has no rounded corners, no gradient fill, no drop shadow and no clip
+mask. That ceiling is what kept Last Purpose's "XCYOS" retro-OS terminal
+looking like a rough approximation of its mockup instead of the mockup.
+This release adds a way through it: bake the entire *fixed* chrome of a
+window (bezel with real arc corners, radial desktop gradient, gradient
+title bar, drop shadow, bevels, side rail, logo watermark, vignette +
+scanlines) ONCE into a single PNG offline, blit that PNG at runtime with
+`drawTextureScaled`, and only paint the *dynamic* content into named
+rectangular "zones" on top of it.
+
+### KeyasUI - skin registry
+
+- **`KeyasUI.registerSkin(id, def)` / `KeyasUI.getSkin(id)`.** `def` carries
+  `chromePath` (media path to the baked PNG), `bakeW`/`bakeH` (the size the
+  PNG was authored at) and `zones` = `{ name = {x, y, w, h}, ... }` content
+  rectangles in bake-space pixels. Alternatively pass `def.spec` = a table
+  (typically `require`-d from a generated `zones.lua`) that itself holds
+  `bakeW`/`bakeH`/`zones`. The texture is fetched lazily on first
+  `getSkin`, with an error `print` (never a crash) if the path is wrong.
+
+### KeyasUI.Window - skin mode
+
+- **`KeyasUI.Window:new{ skin = "<id>" }`.** The window sizes itself to the
+  skin's aspect ratio at ~95% of the screen and centres itself, so PZ does
+  **not** pause/dim the game the way a full-screen panel does. It draws the
+  chrome scaled to fill and skips its own bevel / title bar / status bar /
+  auto close button (all of that is baked into the PNG). Background alpha
+  is forced to 0 so only the PNG shows.
+- **`window:zone("name")` -> `x, y, w, h`** in panel-local coordinates
+  (the bake-space zone rect multiplied by the live scale factor).
+- **`window:addZoneButton("name", onClick, opts)`** puts a transparent
+  `ISButton` hit-target over a baked control (e.g. the title-bar X, a rail
+  entry). `opts.hover` gives it a translucent hover tint. Buttons are
+  repositioned automatically on `layout()` (resolution change, etc.).
+- **`onRenderContent(x, y, w, h)`** is where the consumer paints everything
+  that isn't baked - list rows, detail text, the active-rail highlight -
+  using `zone()` to place it.
+- Skin windows never drag (there's nothing to drag them by - the frame is
+  a texture); `onMouseDown` is skin-safe.
+
+### tools/skin_gen (offline, not shipped)
+
+- **`generate_skin.ps1`** bakes `chrome.png` + `zones.lua` from a `.ps1`
+  spec file, using .NET `System.Drawing`: `LinearGradientBrush` for the
+  title/desktop gradients, `PathGradientBrush` for the vignette,
+  `GraphicsPath.AddArc` for the rounded bezel corners. Windows + .NET only;
+  nothing from this folder ends up in the mod.
+- **`spec.xcyos.ps1`** is the worked example spec (rail labels, stripe,
+  logo watermark path, window rect, title text, pane rects).
+- **`README.md`** documents every spec key and how to wire the two output
+  files into a consumer mod.
+
+### examples/xcyos
+
+- The baked `chrome.png` + `zones.lua` for the XCYOS terminal, plus
+  **`demo.lua`** - a `KeyasUI.Window{ skin = "xcyos" }` with working rail
+  switching and a wired baked close button, reproducing the mockup with
+  KeyasLib alone (no Last Purpose code).
+
+### mod.info
+
+- `versionMin` `42.0` -> `42.20.4`, `modversion` -> `1.1.0`, added
+  `author` and a `poster.png`.
+
 ## [1.0.1] - Correction pass before first consumer (Last Purpose)
 
 Eight targeted fixes found while lining KeyasZones and KeyasUI up against

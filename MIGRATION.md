@@ -128,6 +128,51 @@ those still go through the same `options` object `KeyasOptions.createPanel`
 returns - it doesn't need to know about every option, only the ones it
 wires up for you.
 
+## 5. `LP_Computer.lua` chrome → `KeyasUI` skin system (1.1.0)
+
+Section 1 above describes the *incremental* path (helpers, then icons, then
+font, then the window class). KeyasLib 1.1.0 adds a second, more aggressive
+option for the window-frame step specifically: instead of rebasing
+`LP_Computer`'s hand-drawn frame onto `KeyasUI.Window` and still drawing
+every bevel/gradient with ISUI primitives, bake the whole fixed frame to a
+PNG and let `LP_Computer` only draw the parts that change.
+
+This is the route to make the in-game window match the XCYOS mockup
+pixel-for-pixel, which the primitive-drawn version can't (no rounded
+corners, no real gradients, no shadow in ISUI).
+
+**Steps:**
+
+1. Keep `LP_Computer`'s baked-skin assets where they are for now
+   (`Last Purpose/42/media/ui/LastPurpose/xcyos_chrome.png` + its zone
+   rects). The `tools/skin_gen/spec.xcyos.ps1` in this repo already points
+   its `logo` key at Last Purpose's `xcyos_logo.png`; re-running
+   `generate_skin.ps1` regenerates both `chrome.png` and `zones.lua` from
+   that one spec, so the zone rects never drift from the art.
+2. In `LP_Computer.lua`, `require "KeyasLib/KeyasUI"` and, once (guarded by
+   a module-level `registered` flag, inside a function - never at file
+   scope), call
+   `KeyasUI.registerSkin("xcyos", { chromePath = "media/ui/LastPurpose/xcyos_chrome.png", spec = require "LastPurpose/xcyos_zones" })`.
+3. Change `LPComputer` so its window is a `KeyasUI.Window:derive` (or wraps
+   one) constructed with `{ skin = "xcyos" }`. Delete `LP_Computer`'s own
+   panel sizing / centering / `BAKE_W`/`BAKE_H` scale math - the Window
+   does all of it now. `SKIN.rail`/`SKIN.detailPane`/etc. become
+   `zones` in the generated `zones.lua`.
+4. Move `LP_Computer`'s `paint()` body into `onRenderContent(x, y, w, h)`.
+   Replace every `self:zone(bake)` call with `self:zone("<name>")`.
+   Replace the hand-built `appHitboxes` loop and the transparent action
+   `ISButton` with `self:addZoneButton("rail1", ...)` .. `"rail4"` and
+   `addZoneButton("titleClose", ...)`.
+5. The font helpers (`ensureFontsRegistered`, `text`/`measure`/`lineH`)
+   already delegate to `KeyasUI.text`/`measure` - no change needed there,
+   they're orthogonal to the skin system.
+6. Once the skinned window renders correctly, the dead primitives in
+   `LP_Computer.lua` (`bevel`, `renderRail`, `RAIL_W`, `STRIPE`,
+   `TITLE_BG`, `DESKTOP`, `SCREEN`, `appGlyph`) can be deleted.
+
+`examples/xcyos/demo.lua` in this repo is a complete, working reference for
+what the migrated `LPComputer` looks like structurally.
+
 ## 4. Future unlocks → `KeyasReq`
 
 Not a migration of existing code (Last Purpose doesn't have a
