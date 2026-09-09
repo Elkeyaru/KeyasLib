@@ -2,6 +2,22 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.4] - KeyasCSS: inline camelCase keys + container shrink-wrap
+
+- **Inline `style` camelCase keys now resolve.** `canonProp` was
+  lowercasing every property name for its alias lookup and then returning
+  the lowercased form, so `style = { backgroundColor = "#fff" }` became
+  `c.backgroundcolor` and never applied. It now only lowercases for the
+  alias table and otherwise returns the name as authored; kebab-case from a
+  stylesheet still converts to camelCase as before.
+- **Auto-width containers shrink-wrap during intrinsic measurement.** A
+  `display:flex` / block node with no explicit width used to measure as the
+  full probe width, so a flex-row child like a "hug your content" button
+  stretched across the whole row. It now measures to its children's
+  natural extent (sum of child mains + gaps for a row, widest child for a
+  column/block), matching the text-leaf shrink-wrap already in place. The
+  real layout pass is unaffected.
+
 ## [1.2.3] - KeyasCSS: side-longhand spacing crash
 
 `margin-top` / `padding-left` / ... (the per-side longhand spacing

@@ -362,8 +362,16 @@ local PROP_ALIAS = {
 }
 
 local function canonProp(name)
-    name = name:match("^%s*(.-)%s*$"):lower()
-    return PROP_ALIAS[name] or name:gsub("%-(%l)", function(c) return c:upper() end)
+    name = name:match("^%s*(.-)%s*$")
+    local aliased = PROP_ALIAS[name:lower()]
+    if aliased then return aliased end
+    if name:find("%-") then
+        -- kebab-case -> camelCase
+        return (name:lower():gsub("%-(%a)", function(c) return c:upper() end))
+    end
+    -- already a single word or camelCase (an inline `style` key): keep as
+    -- authored, so `style = { backgroundColor = ... }` still resolves.
+    return name
 end
 
 --- Expands the few shorthands we accept into the longhand keys the layout
@@ -746,8 +754,10 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
     end
     w = clamp(w, lenPx(c.minWidth), lenPx(c.maxWidth))
 
+    local widthWasAuto = (lenPx(c.width, availW) == nil)
     local cw = math.max(0, w - 2 * bd - pL - pR)   -- content width
     local contentH                                  -- natural content-box height from children/text
+    local naturalW = cw                             -- content-box width the children actually want
     local bx = ox + mL
     local by = oy + mT
     local inX = bx + bd + pL
@@ -874,9 +884,11 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
                 end
             end
             contentH = crossExtent
+            naturalW = usedMain           -- sum of child mains + gaps
         else
             contentH = cursor - between  -- last `between` overshoots
             if #kids == 0 then contentH = 0 end
+            naturalW = maxCross           -- widest child (column cross axis)
         end
     else
         -- block flow: stack vertically, each child gets full content width
@@ -886,9 +898,20 @@ layoutNode = function(node, ox, oy, availW, availH, measuring)
             local chC = ch.computed
             layoutNode(ch, inX, yy, cw, math.huge, measuring)
             yy = yy + ch.box.h + chC.marginTop + chC.marginBottom
-            maxChildW = math.max(maxChildW, ch.box.w)
+            maxChildW = math.max(maxChildW, ch.box.w + chC.marginLeft + chC.marginRight)
         end
         contentH = yy - inY
+        naturalW = maxChildW
+    end
+
+    -- Measurement pass, auto width, has children: shrink the box to what
+    -- the children actually want so a flex sibling can size to content
+    -- (mirrors the text-leaf shrink-wrap above). The real layout pass
+    -- re-lays everything at the definite size, so this only affects
+    -- intrinsic sizing.
+    if measuring and widthWasAuto and #kids > 0 and naturalW < cw then
+        w = w - (cw - naturalW)
+        cw = naturalW
     end
 
     -- border-box height
