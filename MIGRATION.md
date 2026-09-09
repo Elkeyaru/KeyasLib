@@ -11,6 +11,47 @@ Order of operations below is the safest one: UI first (purely visual, easy
 to eyeball), then the zone-sealing security system (has real gameplay
 consequences if it regresses), then options (lowest risk, do it whenever).
 
+## 0. `LP_Computer.lua` → `KeyasCSS` (preferred, as of 1.2.0)
+
+Sections 1 and 5 below describe two earlier routes: rebuild the frame on
+`KeyasUI.Window` with hand-drawn primitives (section 1), or bake the whole
+frame to a skin PNG (section 5). **`KeyasCSS` supersedes both** as the
+target for the computer GUI:
+
+- It gets the rounded corners, gradient title bar and drop shadow the
+  mockup needs - at runtime, tinted from one small 9-slice atlas - so
+  there's no per-window PNG to re-bake every time the layout moves.
+- It brings a real box model + flexbox, so the list/detail panes, the
+  rail, the row layouts and the action button are described as a styled
+  tree instead of hand-computed rectangles.
+- Text still goes through the same `KeyasUI.registerFont` bitmap atlas -
+  `KeyasCSS`'s `font:` property just names a registered font id.
+
+**Shape of the migrated `LP_Computer`:**
+
+1. `require "KeyasLib/KeyasCSS"` (and keep `KeyasUI` for the font
+   registration).
+2. Once, inside a function: `local SHEET = KeyasCSS.parse[[ ... ]]` with
+   the XCYOS palette (the same hex values already in `LP_Computer.lua`).
+3. Replace the `LPComputer` panel with a `KeyasCSS.Surface` (or keep the
+   panel and give it a `KeyasCSS.node` tree it lays out in `prerender` and
+   paints in `render` - `Surface` just does that for you).
+4. Build the window as a node tree: outer `card` (radius + shadow +
+   `overflow: hidden`), a `header` row (gradient, space-between), a `rail`
+   column, a `listPane` and a `detailPane` in a flex row, an action button
+   node with an `onClick`. Delete `BAKE_W`/`BAKE_H`, the manual scale math,
+   `SKIN.*`, `appHitboxes`, and the transparent `ISButton` overlays -
+   `onClick` on the relevant nodes replaces all of it.
+5. Keep every program/menu/story string exactly as-is; only the plumbing
+   under them changes.
+6. The old primitive helpers in `LP_Computer.lua` (`bevel`, `renderRail`,
+   `drawActionButton`, `RAIL_W`, `STRIPE`, `TITLE_BG`, `DESKTOP`, `SCREEN`,
+   `appGlyph`) all become dead code and can be removed.
+
+`examples/css_demo/demo.lua` is the structural reference. The baked-skin
+assets and `tools/skin_gen` stay in the repo for any window that genuinely
+wants a fixed pixel-art frame, but the computer GUI isn't that case.
+
 ## 1. `LP_Computer.lua` → `KeyasUI`
 
 `LP_Computer.lua` currently owns: the retro-OS window frame, bevel/pane

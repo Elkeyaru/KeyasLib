@@ -2,6 +2,71 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.0] - KeyasCSS: a CSS-style layout + paint engine
+
+This is the release that makes "describe the UI, don't hand-place every
+pixel" the primary way to build with KeyasLib. Zone-sealing and the other
+helpers stay, but they're now the secondary story.
+
+ISUI gives you filled rectangles, stretched textures and glyphs - nothing
+else. **KeyasCSS** adds a box model, flexbox, rounded corners, borders,
+gradients and drop shadows on top of those primitives, so a consumer mod
+can hand it a tree of boxes plus a stylesheet and get it laid out and
+painted in-game - matching a design instead of approximating it.
+
+### New module: `KeyasCSS` (`common/media/lua/client/KeyasLib/KeyasCSS.lua`)
+
+- **`KeyasCSS.parse(cssString)`** -> a stylesheet. Flat selectors (`tag`,
+  `.class`, `#id`, comma lists) with normal specificity + source order.
+  Shorthands expanded: `margin`, `padding`, `border`, `background`,
+  `box-shadow`, `border-radius`.
+- **`KeyasCSS.node{ tag, class, id, style, text, children, onClick, key }`**
+  -> a node. `style` keys accept camelCase or kebab-case. `children`
+  entries may be nodes or plain defs.
+- **`node:resolve(stylesheet)`** merges defaults < stylesheet rules <
+  inline `style`. **`node:layout(x, y, w, h)`** fills every box.
+  **`node:paint(owner)`** draws it. **`node:hit(x, y)`** / **`node:find(id)`**.
+- **`KeyasCSS.Surface`** (an `ISPanel`): hosts a tree, lays out and paints
+  it every frame, routes clicks to the deepest node with an `onClick`.
+  `:setRoot()`, `:refresh()`, `onClickMiss`.
+- Supported CSS: `display: block|flex|none`, `flex-direction`, `gap`,
+  `justify-content` (incl. `space-between`/`space-around`), `align-items`
+  (incl. `stretch`), `flex-grow`; `width`/`height` as px / `%` / `auto`
+  plus `min-`/`max-`; `margin`/`padding`; `border` (width+colour, uniform);
+  `border-radius`; `background-color`; `background-image: linear-gradient(...)`;
+  `box-shadow` (single); `color`; `line-height`; `text-align`; `opacity`;
+  `overflow: hidden` (via `setStencilRect`). The `font` property is
+  redefined to name a font registered with `KeyasUI.registerFont` (bitmap
+  atlas); with none, text falls back to vanilla `UIFont`.
+- Standalone draw helpers, usable without the node tree:
+  `KeyasCSS.roundedRect(owner, x,y,w,h, radius, color)`,
+  `KeyasCSS.dropShadow(owner, x,y,w,h, radius, {x,y,blur,color})`,
+  `KeyasCSS.gradientRect(owner, x,y,w,h, "linear-gradient(...)")`,
+  `KeyasCSS.color("#rrggbbaa" | "rgba(...)" | {...})`.
+- **Not in v1** (documented in the file header so nobody debugs a gap):
+  grid, `position: absolute/fixed`, transforms/transitions, `calc()`,
+  per-corner radius, rounded corners on gradient fills, descendant/pseudo
+  selectors.
+
+### New asset + tool
+
+- **`common/media/ui/KeyasLib/keyas_ui_9slice.png`** (128x64) - the one
+  runtime asset KeyasCSS needs. Rounded corners / borders / shadows are
+  9-sliced from it and tinted, so one white atlas serves every colour and
+  every box size.
+- **`tools/nineslice_gen/generate_nineslice.ps1`** bakes that atlas
+  (System.Drawing; offline; `-Radius` / `-Blur` params). See its README.
+
+### examples
+
+- **`examples/css_demo/demo.lua`** - a rounded, shadowed card with a
+  gradient header and a flex-column of clickable rows, built from a CSS
+  string + a node tree. No Last Purpose code.
+
+### mod.info
+
+- `modversion` -> `1.2.0`; description rewritten to lead with KeyasCSS.
+
 ## [1.1.0] - Skin system (reproduce a designed GUI 1:1)
 
 ISUI has no rounded corners, no gradient fill, no drop shadow and no clip

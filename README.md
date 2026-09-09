@@ -3,10 +3,22 @@
 A no-content Lua library mod for Project Zomboid Build 42. Other mods
 depend on it with `require=KeyasLib` in their `42/mod.info` and get:
 
+- **KeyasCSS** - the main event: a CSS-style layout + paint engine on top
+  of ISUI. Describe an interface as a tree of boxes plus a stylesheet
+  (`KeyasCSS.parse`) and get a box model, flexbox, rounded corners,
+  borders, gradients and drop shadows - none of which ISUI draws on its
+  own - so the in-game UI matches the design instead of approximating it.
+  `KeyasCSS.Surface` (an `ISPanel`) hosts a tree, lays it out every frame
+  and routes clicks. Standalone helpers too: `roundedRect`, `dropShadow`,
+  `gradientRect`, `color`.
 - **KeyasUI** - a retro ISUI toolkit: a `Window` base class, bevel/pane
-  drawing helpers, a tinted icon loader, and a bitmap-font renderer that
-  draws text glyph-by-glyph from a PNG atlas (B42 has no clean way to
-  register a new vanilla-safe font).
+  drawing helpers, a tinted icon loader, a bitmap-font renderer that draws
+  text glyph-by-glyph from a PNG atlas (B42 has no clean way to register a
+  new vanilla-safe font), and a skin system that blits a pre-baked chrome
+  PNG for a pixel-exact fixed window frame.
+
+Secondary helpers (useful, but not why KeyasLib exists):
+
 - **KeyasZones** - seal doors/windows in an area while a condition holds
   (alarms, heist sequences, story gating), with a rate-limited sweep that
   reverts damage that bypasses normal Lua actions.
@@ -57,12 +69,108 @@ end
 ## KeyasLib (shared config)
 
 ```lua
-KeyasLib.VERSION            -- "1.0.1"
+KeyasLib.VERSION            -- "1.2.0"
 KeyasLib.DEBUG              -- false by default
 KeyasLib.debugPrint(...)    -- prints "[KeyasLib] ..." only when DEBUG is true
 KeyasLib.MODDATA_PREFIX     -- "KeyasLib_" - reserved for KeyasLib's own ModData keys
 KeyasLib.ZONE_MAX_REBUILDS_PER_SECOND -- 3, read by KeyasZones
 ```
+
+---
+
+## KeyasCSS
+
+The reason KeyasLib exists. A box-model + flexbox + paint engine over ISUI.
+
+### Quick start with `Surface`
+
+```lua
+local sheet = KeyasCSS.parse[[
+  .card   { width: 380px; background: #14161d; border: 1px solid #2b2f3a;
+            border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+            overflow: hidden; }
+  .header { height: 56px; padding: 0 16px; display: flex; align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(180deg, #3a4a7a 0%, #26305a 100%); }
+  .title  { color: #eef1ff; font: term16; }
+  .body   { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .row    { background: #1b1e27; border-radius: 10px; padding: 12px 14px;
+            display: flex; justify-content: space-between; align-items: center; }
+  .row.sel{ background: #2a2f6a; border: 1px solid #6f7bff; }
+]]
+
+local surface = KeyasCSS.Surface:new(x, y, w, h, {
+    stylesheet = sheet,
+    padding = 20,
+    background = "rgba(0,0,0,0.35)",
+    onClickMiss = function(s) s:removeFromUIManager() end,
+    root = {
+        tag = "div", class = "card", children = {
+            { tag = "div", class = "header", children = {
+                { tag = "div", class = "title", text = "ARCHIVO DE MISIONES" },
+            }},
+            { tag = "div", class = "body", children = {
+                { tag = "div", class = "row", text = "Objetivo: Knox Bank",
+                  onClick = function(node, s) print("clicked", node.text) end },
+            }},
+        },
+    },
+})
+surface:initialise()
+surface:addToUIManager()
+```
+
+`Surface` lays out and paints the tree every frame and routes a click to
+the deepest node with an `onClick`. Swap the whole tree with
+`surface:setRoot(newNodeOrDef)`; if you mutate node styles/text in place,
+call `surface:refresh()` to re-apply the stylesheet.
+
+### Building without `Surface`
+
+```lua
+local root = KeyasCSS.node{ tag = "div", class = "card", children = { ... } }
+root:resolve(sheet)                 -- merge defaults < sheet rules < inline style
+root:layout(screenX, screenY, w, h) -- fill every node.box
+root:paint(self)                    -- draw (self = any ISUIElement)
+local hit = root:hit(mx, my)        -- deepest node with an onClick under the point
+local n   = root:find("someId")     -- depth-first by id
+```
+
+### Standalone draw helpers
+
+No node tree needed - use these straight inside any `render()`:
+
+```lua
+KeyasCSS.roundedRect(self, x, y, w, h, radius, "#1b1e27")
+KeyasCSS.dropShadow(self, x, y, w, h, radius, { x=0, y=8, blur=20, color="rgba(0,0,0,0.5)" })
+KeyasCSS.gradientRect(self, x, y, w, h, "linear-gradient(180deg, #3a4a7a, #26305a)")
+local c = KeyasCSS.color("#7b5cff")   -- -> {r,g,b,a} in 0..1
+```
+
+Rounded corners / borders / shadows are 9-sliced from one bundled atlas
+(`media/ui/KeyasLib/keyas_ui_9slice.png`, baked by `tools/nineslice_gen`)
+and tinted, so any colour and any box size works. If the atlas ever fails
+to load, they degrade to plain rectangles rather than erroring.
+
+### Supported CSS
+
+| Area | Properties |
+|---|---|
+| layout | `display: block\|flex\|none`, `flex-direction`, `gap`, `justify-content` (incl. `space-between`/`space-around`), `align-items` (incl. `stretch`), `flex-grow` |
+| sizing | `width`/`height` as px / `%` / `auto`; `min-`/`max-width`/`height` |
+| spacing | `margin`, `padding` (+ `-top`/`-right`/`-bottom`/`-left`) |
+| paint | `background-color`, `background-image: linear-gradient(...)`, `border` (width+colour, uniform), `border-radius`, `box-shadow` (single), `opacity` |
+| text | `color`, `line-height`, `text-align`, `font` (**redefined**: names a font registered with `KeyasUI.registerFont`; with none, falls back to vanilla `UIFont`) |
+| clipping | `overflow: hidden` (via `setStencilRect`) |
+
+Selectors are flat: `tag`, `.class`, `#id`, and comma-separated lists.
+Specificity is the usual id > class > tag, source order breaking ties.
+
+**Not in v1:** grid, `position: absolute/fixed`, transforms, transitions,
+`calc()`, per-corner `border-radius`, rounded corners *on* gradient fills
+(gradient backgrounds paint square-cornered), descendant/pseudo selectors.
+
+See `examples/css_demo/demo.lua` for a complete runnable panel.
 
 ---
 
@@ -258,11 +366,16 @@ existing panel back rather than a duplicate-registration error.
 ```
 42/mod.info                                  - no require=, this IS the library
 common/media/lua/shared/KeyasLib/KeyasLib.lua
+common/media/lua/client/KeyasLib/KeyasCSS.lua
 common/media/lua/client/KeyasLib/KeyasUI.lua
 common/media/lua/client/KeyasLib/KeyasZones.lua
 common/media/lua/client/KeyasLib/KeyasReq.lua
 common/media/lua/client/KeyasLib/KeyasOptions.lua
+common/media/ui/KeyasLib/keyas_ui_9slice.png  - runtime asset for KeyasCSS rounded corners/shadows
 tools/font_atlas_gen/          - offline Python tool, never packaged
+tools/nineslice_gen/           - offline .NET tool, bakes the 9-slice atlas (the PNG IS packaged)
+tools/skin_gen/                - offline .NET tool, bakes a full window-frame skin PNG
+examples/                      - runnable KeyasCSS / skin demos, never packaged
 LICENSE, README.md, CHANGELOG.md, MIGRATION.md
 ```
 
