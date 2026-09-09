@@ -107,6 +107,16 @@ aren't affected.
 
 ## 2. `LP_BankSecurity.lua` → `KeyasZones`
 
+> **Done (partial), 2026-09-09.** `LP_BankSecurity.lua` now registers
+> `KeyasZones.register("knox_bank_seal", {bbox, active, warn})` and dropped
+> its own `isValid()` wrapping + restoration sweep (`GUARDED_ACTIONS`,
+> `installBankActionGuards`, `restoreEntranceIfBroken`, `onWeaponHitBankObject`).
+> It kept the bank-specific parts KeyasZones doesn't cover: real
+> `setPermaLocked` + original-health save/restore, the broken-glass counter
+> feeding the early-alarm, and the approach thoughts. 366 → 264 lines.
+> Still needs an in-game check that KeyasZones' entry scan finds the bank's
+> doors/windows (`KeyasLib.DEBUG = true`, watch the count).
+
 `LP_BankSecurity.lua`'s sealed-zone mechanism (wrap `isValid()` on the
 relevant timed actions, run a restoration sweep) is now `KeyasZones`,
 generalized to take a bbox/active-check/warn callback instead of being
@@ -159,6 +169,13 @@ crosswalk, useful while reading the two side by side:
    broken/not-broken.
 
 ## 3. `LP_Options.lua` → `KeyasOptions`
+
+> **Done, 2026-09-09.** `LP_Options.lua` builds its panel with
+> `KeyasOptions.createPanel("LastPurpose", "Last Purpose", { keybind = ... })`
+> and adds the `debug` tickbox by hand on the returned object (kept id
+> `debug`, syncs `LastPurpose.DEBUG` not `KeyasLib.DEBUG`, so
+> `opts.addDebugTickbox` wasn't used). `refreshOptions()` retries `build()`
+> if KeyasOptions loaded after this file.
 
 Lowest risk of the three. Replace `LP_Options.lua`'s direct
 `PZAPI.ModOptions` calls with one `KeyasOptions.createPanel(...)` call,
