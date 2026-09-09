@@ -13,7 +13,7 @@
 
 KeyasLib = KeyasLib or {}
 
-KeyasLib.VERSION = "1.2.0"
+KeyasLib.VERSION = "1.2.1"
 
 -- Off by default. Flip at runtime (KeyasOptions exposes a tickbox for this)
 -- to get verbose logging without restarting the game.

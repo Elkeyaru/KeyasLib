@@ -413,10 +413,44 @@ local function applyDecl(into, rawName, rawValue)
     end
 end
 
+-- Declaration keys that are pixel lengths (scaled by opts.scale in parse).
+-- Percentages, "auto", colours, gradients and unit-less numbers (flexGrow,
+-- opacity) are deliberately left alone.
+local SCALABLE_PX = {
+    gap = true, borderWidth = true, borderRadius = true, lineHeight = true,
+    minWidth = true, maxWidth = true, minHeight = true, maxHeight = true,
+    marginTop = true, marginRight = true, marginBottom = true, marginLeft = true,
+    paddingTop = true, paddingRight = true, paddingBottom = true, paddingLeft = true,
+}
+
+local function scaleDecls(decls, k)
+    for key, v in pairs(decls) do
+        if SCALABLE_PX[key] and type(v) == "number" then
+            decls[key] = v * k
+        elseif (key == "width" or key == "height") and type(v) == "string"
+            and not v:find("%%") and v ~= "auto" then
+            local n = tonumber((v:gsub("px", "")))
+            if n then decls[key] = tostring(n * k) end
+        elseif key == "boxShadow" then
+            local sh = parseShadow(v)
+            if sh then
+                sh.x, sh.y, sh.blur = (sh.x or 0) * k, (sh.y or 0) * k, (sh.blur or 0) * k
+                decls[key] = sh  -- parseShadow() later passes a table straight through
+            end
+        end
+    end
+end
+
 --- Parses a CSS string into a stylesheet object. Selectors are flat:
 --- `tag`, `.class`, `#id`, and comma-separated lists of those. Specificity
 --- is the usual (id > class > tag), with source order breaking ties.
-function KeyasCSS.parse(css)
+---
+--- @param opts table optional { scale = <number> } - multiplies every px
+---   length in the sheet, so you can author at 1x and render at any
+---   resolution (percentages, `auto` and colours are untouched). Inline
+---   `style` on a node is NOT scaled - keep sizing in the sheet.
+function KeyasCSS.parse(css, opts)
+    local k = opts and tonumber(opts.scale) or 1
     local rules = {}
     css = css:gsub("/%*.-%*/", "")  -- strip comments
     for selectorList, body in css:gmatch("([^{}]+)%s*{(.-)}") do
@@ -424,6 +458,7 @@ function KeyasCSS.parse(css)
         for prop, val in body:gmatch("([%w%-]+)%s*:%s*([^;]+)") do
             applyDecl(decls, prop, val)
         end
+        if k ~= 1 then scaleDecls(decls, k) end
         for sel in selectorList:gmatch("[^,]+") do
             sel = sel:match("^%s*(.-)%s*$")
             if sel ~= "" then
@@ -436,7 +471,7 @@ function KeyasCSS.parse(css)
             end
         end
     end
-    return {rules = rules}
+    return {rules = rules, scale = k}
 end
 
 local function ruleMatches(rule, node)

@@ -2,6 +2,28 @@
 
 All notable changes to KeyasLib are documented in this file.
 
+## [1.2.1] - KeyasCSS resolution scaling + the XCYOS reference
+
+### KeyasCSS
+
+- **`KeyasCSS.parse(css, { scale = k })`** multiplies every px length in the
+  sheet at load time (percentages, `auto` and colours untouched), so a
+  stylesheet can be authored at 1x and rendered at any resolution. The
+  consumer picks `k` from the screen size. Inline `style` on a node is not
+  scaled - keep sizing in the sheet. Bitmap-font glyphs are not scaled
+  either (they're a fixed atlas); register a font id per size.
+
+### examples/xcyos_css
+
+- The **XCYOS terminal mockup translated to KeyasCSS**: `xcyos_sheet.lua`
+  (the mockup's `:root` palette + every CSS rule as a `KeyasCSS` stylesheet,
+  with a header mapping each mockup feature to either "KeyasCSS" or "baked
+  backdrop art") and `xcyos.lua` (the node tree + `Surface` + the rail /
+  mission-list / detail-pane / profession-dock interaction, data copied
+  from the mockup so the two can be diffed). This is the structural
+  reference for the Last Purpose `LP_Computer` migration - see
+  `MIGRATION.md` section 0.
+
 ## [1.2.0] - KeyasCSS: a CSS-style layout + paint engine
 
 This is the release that makes "describe the UI, don't hand-place every

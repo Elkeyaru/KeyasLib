@@ -69,7 +69,7 @@ end
 ## KeyasLib (shared config)
 
 ```lua
-KeyasLib.VERSION            -- "1.2.0"
+KeyasLib.VERSION            -- "1.2.1"
 KeyasLib.DEBUG              -- false by default
 KeyasLib.debugPrint(...)    -- prints "[KeyasLib] ..." only when DEBUG is true
 KeyasLib.MODDATA_PREFIX     -- "KeyasLib_" - reserved for KeyasLib's own ModData keys
@@ -170,7 +170,27 @@ Specificity is the usual id > class > tag, source order breaking ties.
 `calc()`, per-corner `border-radius`, rounded corners *on* gradient fills
 (gradient backgrounds paint square-cornered), descendant/pseudo selectors.
 
-See `examples/css_demo/demo.lua` for a complete runnable panel.
+### Rendering at any resolution
+
+Author the sheet at 1x and let `parse` scale it:
+
+```lua
+local k = math.min(sw * 0.92 / DESIGN_W, sh * 0.92 / DESIGN_H)
+local sheet = KeyasCSS.parse(css, { scale = k })   -- every px in `css` x k
+```
+
+Percentages, `auto` and colours are untouched. Inline `style` on a node is
+*not* scaled - keep sizing in the sheet. Bitmap-font glyphs aren't scaled
+either (fixed atlas) - register a font id per size you need.
+
+### Examples
+
+- `examples/css_demo/demo.lua` - a small runnable card panel.
+- `examples/xcyos_css/` - the full "XCYOS terminal" mockup translated to a
+  KeyasCSS stylesheet + node tree (`xcyos_sheet.lua` maps every mockup
+  feature to KeyasCSS or to baked backdrop art; `xcyos.lua` builds the
+  interactive tree). The reference for porting a designed HTML/CSS mockup
+  onto KeyasCSS.
 
 ---
 
